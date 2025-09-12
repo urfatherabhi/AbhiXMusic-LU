@@ -23,11 +23,17 @@ from AbhiXMusic.utils.inline import help_pannel, private_panel, start_panel
 from config import BANNED_USERS
 from strings import get_string
 
+
 @app.on_message(filters.command(["start"]) & filters.private & ~BANNED_USERS)
 @LanguageStart
 async def start_pm(client, message: Message, _):
     await add_served_user(message.from_user.id)
-    await message.react("❤️")
+
+    # ✅ Reaction safe banaya
+    try:
+        await message.react("❤️")
+    except Exception:
+        pass
 
     if len(message.text.split()) > 1:
         name = message.text.split(None, 1)[1]
@@ -87,20 +93,20 @@ async def start_pm(client, message: Message, _):
     else:
         try:
             out = private_panel(_)
-            # Initial welcome animation (ab sirf 2 baar change hoga aur turant delete)
+            # Initial welcome animation
             lol = await message.reply_text(f"💕 Wᴇʟᴄᴏᴍᴇ Bᴀʙʏ {message.from_user.mention} 💕 ❣️")
-            await asyncio.sleep(0.1) # Thoda sa delay pehle change ke liye
+            await asyncio.sleep(0.1)
             await lol.edit_text(f"🌸 Wᴇʟᴄᴏᴍᴇ Bᴀʙʏ {message.from_user.mention} 🌸 🥳")
-            await asyncio.sleep(0.1) # Thoda sa delay dusre change ke liye
+            await asyncio.sleep(0.1)
             await lol.edit_text(f"💖 Wᴇʟᴄᴏᴍᴇ Bᴀʙʏ {message.from_user.mention}💖 💥")
-            await lol.delete() # Turant delete
+            await lol.delete()
 
             # Static welcome message
             welcome = await message.reply_text(f"🌟 Wᴇʟᴄᴏᴍᴇ {message.from_user.mention} to {app.mention}! 🌟 Gᴇᴛ Rᴇᴀᴅʏ Fᴏʀ Aᴡᴇꜱᴏᴍᴇ Mᴜꜱɪᴄ! 🎶")
             await asyncio.sleep(1)
             await welcome.delete()
 
-            # Father is coming animation (standard characters)
+            # Father animation
             father = await message.reply_text("⚡")
             await asyncio.sleep(0.07)
             await father.edit_text("⚡ W")
