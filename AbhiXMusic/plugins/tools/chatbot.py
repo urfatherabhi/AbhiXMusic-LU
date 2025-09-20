@@ -265,7 +265,7 @@ async def update_chat_history(chat_id, sender_name, sender_username, sender_id, 
 
 HIDDEN_LINKS = [
     (TELEGRAM_CHANNEL_LINK, "My Channel"),
-    (YOUTUBE_CHANNEL_LINK, "My YouTube"),
+    (YOUTUBE_CHANNEL_LINK, "https://www.youtube.com/@imagineiq"),
     (BOT_START_GROUP_LINK, "Add Me To Your Group")
 ]
 
@@ -397,13 +397,19 @@ if riya_bot:
                         all_gif_ids = await gif_ids_collection.find().to_list(length=100)
                         if all_gif_ids is not None and len(all_gif_ids) > 0:
                             selected_gif_id = random.choice(all_gif_ids)["_id"]
-                            await message.reply_animation(selected_gif_id, quote=True)
-                            return
-                        else:
-                            # Fallback if no GIFs in DB
-                            bot_reply = "Haha, ye GIF toh mast hai! Par lagta hai abhi mere paas koi GIF nahi hai bhejane ke liye. Tum hi aur bhejo! 😉"
-                            await message.reply_text(bot_reply, quote=True, parse_mode=enums.ParseMode.HTML, disable_web_page_preview=True)
-                            return
+                            try:
+                                await message.reply_animation(selected_gif_id, quote=True)
+                                return
+                            except Exception as reply_error:
+                                # If sending fails, log the error and remove the bad ID from DB
+                                print(f"❌ DEBUG: Error sending GIF with ID {selected_gif_id}: {reply_error}")
+                                await gif_ids_collection.delete_one({"_id": selected_gif_id})
+                                print(f"INFO: Removed invalid GIF ID {selected_gif_id} from DB.")
+
+                        # Fallback if no GIFs in DB or sending fails
+                        bot_reply = "Haha, ye GIF toh mast hai! Par lagta hai abhi mere paas koi GIF nahi hai bhejane ke liye. Tum hi aur bhejo! 😉"
+                        await message.reply_text(bot_reply, quote=True, parse_mode=enums.ParseMode.HTML, disable_web_page_preview=True)
+                        return
 
                     except Exception as gif_error:
                         print(f"❌ DEBUG: Error handling GIF: {gif_error}")
@@ -725,7 +731,7 @@ if riya_bot:
 
             final_bot_response = bot_reply
             await message.reply_text(final_bot_response, quote=True, parse_mode=enums.ParseMode.HTML, disable_web_page_preview=True)
-            await update_chat_history(chat_id, CHATBOT_NAME, client.me.username if client.me is not None else None, client.me.id, final_bot_response, role="model")
+            await update_chat_history(chat_id, CHATBOT_NAME, client.me.username if client.me is not None else None, client.me.id, bot_reply, role="model")
 
         except Exception as e:
             print(f"❌ DEBUG_HANDLER: Error generating response for {chat_id}: {e}")
