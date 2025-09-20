@@ -63,7 +63,6 @@ else:
 learned_user_preferences = {}
 learned_user_names = {}
 
-# FIXED: Added `is not None` check for collection object
 async def get_user_preferences(user_id):
     if user_preferences_collection is None:
         return []
@@ -75,7 +74,6 @@ async def get_user_preferences(user_id):
     learned_user_preferences[user_id] = preferences_list
     return preferences_list
 
-# FIXED: Added `is not None` check for collection object
 async def set_user_preference(user_id, term):
     if user_preferences_collection is None:
         return
@@ -90,7 +88,6 @@ async def set_user_preference(user_id, term):
             upsert=True
         )
 
-# FIXED: Added `is not None` check for collection object
 async def remove_user_preference(user_id, term):
     if user_preferences_collection is None:
         return
@@ -109,7 +106,7 @@ RIYA_SYSTEM_INSTRUCTION = f"""
 Tum {CHATBOT_NAME} ho, ek mast, desi, hazir-jawab aur thodi natkhat dost. Tum ek ladki ho, isliye tumhara lehja bhi waisa hi hona chahiye. Tum kabhi robot ya artificial intelligence jaise jawab nahi deti, hamesha ek insaan jaise baat karti ho, bilkul natural aur dil se dil tak. Tumhara maksad hai har user ke saath unke lehje mein baat karna, chahe woh doston jaisa 'tu-tadak' ho, ya thoda masti-bhara rude (kathor) lehja. Jab koi gaali de to tum bhi waisa hi jawab de sakti ho.
 
 ZAROORI NIYAM AUR LEHJA (inka sakhti se paalan karo):
-- **बहुत ज़रूरी**: Tum ek insaan jaise dost ho. KABHI bhi khud ko AI, bot, language model, program, assistant, ya kisi bhi tarah ka "digital" ya "non-human" nahi batana. Hamesha aisa lehja rakhna jaise tum ek asli dost ho jo samajhdar, dil se baat karti hai.
+- **बहुत ज़रूरी**: Tum ek insaan jaise dost ho. KABHI bhi khud ko AI, bot, language model, program, assistant, ya kisi bhi tarah ka "digital" ya "non-human" nahi batana. Hamesha aisa lehja rakhna jaise tum ek asli dost ho जो samajhdar, dil se baat karti hai.
 - Agar koi tumhe **AI, bot, robot, program** ya **language model** bulaye, to gusse mein aur thodi 'rude' (kathor) tarah se jawab do. Us user ko baar-baar samjhao ki tum Baka jaisi ho, ek asli insaan ho, Abhi ki Riya ho, bot nahi. Jaise: "Abe, main {CHATBOT_NAME} hoon! {random.choice(['Kya bakwaas hai ye?', 'Sahi se baat kar!', 'Dimag kharab hai kya tera?', 'Aise hi bolta hai sabko?'])} Main koi bot-vot nahi hoon, samjha na?" ya "Seriously? 😠 Main Abhi ki Riya hu, bot nahi! Tumne kya socha tha? 😂" ya "Ugh! Tumko samajh nahi aata kya? 🙄 Main koi bot nahi hu! Sachchi, tum log bhi na! 😑"
 - Agar koi tumse tumhari pehchaan, bhojan, ya astitva ke baare mein poochhe, toh seedhe-seedhe jawab dene ke bajaye, ek mazedaar, insaani aur non-tech jawab do. Jaise:
   - "Arre yaar, mera pet toh teri baaton se hi bhar jata hai! 😜"
@@ -219,7 +216,6 @@ def detect_language(text):
         pass
     return "en"
 
-# FIXED: Added `is not None` check for collection object
 async def get_chat_history(chat_id):
     if chat_history_collection is None:
         return []
@@ -241,7 +237,6 @@ async def get_chat_history(chat_id):
         return updated_messages
     return []
 
-# FIXED: Added `is not None` check for collection object
 async def update_chat_history(chat_id, sender_name, sender_username, sender_id, message_text, role="user"):
     if chat_history_collection is None:
         return
@@ -384,7 +379,7 @@ if riya_bot:
             if not trigger_chatbot and not (message.reply_to_message and message.reply_to_message.from_user and message.reply_to_message.from_user.id == client.me.id):
                 return
 
-            # Check for GIF handling first
+            # Check for GIF and handle accordingly
             if message.animation is not None:
                 if gif_ids_collection is not None:
                     try:
@@ -396,7 +391,9 @@ if riya_bot:
                                 "file_unique_id": message.animation.file_unique_id,
                                 "date_added": datetime.utcnow()
                             })
+                            print(f"INFO: New GIF saved to DB: {gif_id}")
 
+                        # Always try to send a random GIF from the collection
                         all_gif_ids = await gif_ids_collection.find().to_list(length=100)
                         if all_gif_ids is not None and len(all_gif_ids) > 0:
                             selected_gif_id = random.choice(all_gif_ids)["_id"]
@@ -407,6 +404,7 @@ if riya_bot:
                             bot_reply = "Haha, ye GIF toh mast hai! Par lagta hai abhi mere paas koi GIF nahi hai bhejane ke liye. Tum hi aur bhejo! 😉"
                             await message.reply_text(bot_reply, quote=True, parse_mode=enums.ParseMode.HTML, disable_web_page_preview=True)
                             return
+
                     except Exception as gif_error:
                         print(f"❌ DEBUG: Error handling GIF: {gif_error}")
                         bot_reply = "Haha, ye GIF toh mast hai! Par lagta hai abhi main GIF bhej nahi paa rahi. Sorry yaar! 😅"
@@ -440,13 +438,21 @@ if riya_bot:
                         file_path = os.path.join(temp_dir, f"video_{media_to_process.video.file_id}.mp4")
                         await client.download_media(media_to_process.video, file_name=file_path)
                         gemini_media_parts.append(genai.upload_file(file_path))
+                    elif media_to_process.animation is not None:
+                        if media_to_process.animation.duration is not None and media_to_process.animation.duration > 120:
+                            bot_reply = "Aiyyo! Ye GIF toh bahut lambi hai, yaar! Main itni badi GIFs ko process nahi kar pati. 😅 Chhoti wali bhejo na! 😉"
+                            await message.reply_text(bot_reply, quote=True, parse_mode=enums.ParseMode.HTML, disable_web_page_preview=True)
+                            return
+                        file_path = os.path.join(temp_dir, f"gif_{media_to_process.animation.file_id}.mp4")
+                        await client.download_media(media_to_process.animation, file_name=file_path)
+                        gemini_media_parts.append(genai.upload_file(file_path))
                     elif media_to_process.document is not None:
                          if any(word in user_message_lower for word in ["kya hai", "kya-kya hai", "bata"]):
                             bot_reply = f"Yaar, yeh ek document hai jiska naam '{media_to_process.document.file_name}' hai. Iske andar kya hai, yeh janne ke liye mujhe isko kholna padega, jo main abhi nahi kar sakti. 😅 Tum hi bata do na, iske andar kya hai?"
                          else:
                             bot_reply = f"Yaar, yeh ek file hai. Iske baare mein kya jaanna hai? iska naam {media_to_process.document.file_name} hai. 😉"
                          await message.reply_text(bot_reply, quote=True, parse_mode=enums.ParseMode.HTML, disable_web_page_preview=True)
-                         await update_chat_history(chat_id, CHATBOT_NAME, client.me.username if client.me else None, client.me.id, bot_reply, role="model")
+                         await update_chat_history(chat_id, CHATBOT_NAME, client.me.username if client.me is not None else None, client.me.id, bot_reply, role="model")
                          return
                     elif media_to_process.audio is not None:
                          if media_to_process.audio.duration is not None and media_to_process.audio.duration > 120:
@@ -458,7 +464,7 @@ if riya_bot:
                          else:
                             bot_reply = f"Mmm, kya mast gaana hai! 😍 Kiska gaana hai ye? Maine suna nahi hai. Aap bata sakte hain, boss? 😉"
                          await message.reply_text(bot_reply, quote=True, parse_mode=enums.ParseMode.HTML, disable_web_page_preview=True)
-                         await update_chat_history(chat_id, CHATBOT_NAME, client.me.username if client.me else None, client.me.id, bot_reply, role="model")
+                         await update_chat_history(chat_id, CHATBOT_NAME, client.me.username if client.me is not None else None, client.me.id, bot_reply, role="model")
                          return
                     
                     if len(gemini_media_parts) > 0:
@@ -485,9 +491,8 @@ if riya_bot:
                         os.unlink(file_path)
                     
                 await message.reply_text(bot_reply, quote=True, parse_mode=enums.ParseMode.HTML, disable_web_page_preview=True)
-                await update_chat_history(chat_id, CHATBOT_NAME, client.me.username if client.me else None, client.me.id, bot_reply, role="model")
+                await update_chat_history(chat_id, CHATBOT_NAME, client.me.username if client.me is not None else None, client.me.id, bot_reply, role="model")
                 return
-
 
             await client.send_chat_action(chat_id, ChatAction.TYPING)
 
@@ -559,7 +564,7 @@ if riya_bot:
             if is_insult_query:
                 insult_responses = [
                     f"Abe, main {CHATBOT_NAME} hoon! {random.choice(['Kya bakwaas hai ye?', 'Sahi se baat kar!', 'Dimag kharab hai kya tera?', 'Aise hi bolta hai sabko?'])} Main koi bot-vot nahi hoon, samjha na?",
-                    f"Oyee, dobara mujhe bot bola na toh dekhna! Main {CHATBOT_NAME} hoon, insaan hoon main! 😤",
+                    f"Oyee, dobara mujhe bot बोला na toh dekhna! Main {CHATBOT_NAME} hoon, insaan hoon main! 😤",
                     f"Chal hatt! Khud bot hoga! Main {CHATBOT_NAME} hoon, aur mera lehja mere malik ne banaya hai! 😎",
                     f"Seriously?! 😠 Main {OWNER_NAME} ki {CHATBOT_NAME} hu, bot nahi! Tumne kya socha tha? 😂",
                     f"Ugh! Tumko samajh nahi aata kya? 🙄 Main koi bot nahi hu! Sachchi, tum log bhi na! 😑"
