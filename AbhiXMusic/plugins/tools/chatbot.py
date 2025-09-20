@@ -33,6 +33,7 @@ mongo_client = None
 chat_history_collection = None
 user_preferences_collection = None
 sticker_ids_collection = None
+gif_ids_collection = None
 if MONGO_DB_URI:
     try:
         mongo_client = AsyncIOMotorClient(MONGO_DB_URI)
@@ -40,6 +41,7 @@ if MONGO_DB_URI:
         chat_history_collection = db.conversations_riya
         user_preferences_collection = db.user_preferences
         sticker_ids_collection = db.sticker_ids_riya
+        gif_ids_collection = db.gif_ids_riya
     except Exception as e:
         print(f"ERROR: Chatbot: Could not initialize MongoDB client: {e}. Chat history/preferences will not be saved. ❌")
 else:
@@ -61,6 +63,7 @@ else:
 learned_user_preferences = {}
 learned_user_names = {}
 
+# FIXED: Added `is not None` check for collection object
 async def get_user_preferences(user_id):
     if user_preferences_collection is None:
         return []
@@ -72,6 +75,7 @@ async def get_user_preferences(user_id):
     learned_user_preferences[user_id] = preferences_list
     return preferences_list
 
+# FIXED: Added `is not None` check for collection object
 async def set_user_preference(user_id, term):
     if user_preferences_collection is None:
         return
@@ -86,6 +90,7 @@ async def set_user_preference(user_id, term):
             upsert=True
         )
 
+# FIXED: Added `is not None` check for collection object
 async def remove_user_preference(user_id, term):
     if user_preferences_collection is None:
         return
@@ -214,6 +219,7 @@ def detect_language(text):
         pass
     return "en"
 
+# FIXED: Added `is not None` check for collection object
 async def get_chat_history(chat_id):
     if chat_history_collection is None:
         return []
@@ -235,14 +241,11 @@ async def get_chat_history(chat_id):
         return updated_messages
     return []
 
-# MODIFIED FUNCTION START
+# FIXED: Added `is not None` check for collection object
 async def update_chat_history(chat_id, sender_name, sender_username, sender_id, message_text, role="user"):
     if chat_history_collection is None:
         return
 
-    # To keep the document size in check, we will limit the number of messages.
-    # The '$slice' operator keeps only the last N messages after a new push.
-    # Limiting to 200 messages should be sufficient for short-term context.
     MAX_HISTORY_MESSAGES = 200
 
     await chat_history_collection.update_one(
@@ -264,7 +267,6 @@ async def update_chat_history(chat_id, sender_name, sender_username, sender_id, 
         },
         upsert=True
     )
-# MODIFIED FUNCTION END
 
 HIDDEN_LINKS = [
     (TELEGRAM_CHANNEL_LINK, "My Channel"),
@@ -303,23 +305,22 @@ def format_event_response(text, add_signature=True):
     return text
 
 def clean_response_emojis(text):
-    text = re.sub(r'[\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF\U0001F700-\U0001F77F\U0001F780-\U0001F7FF\U0001F800-\U0001F8FF\U0001F900-\U0001F9FF\U0001FA00-\U0001FA6F\U0001FA70-\U0001FAFF\U00002702-\U000027B0\U00002639\U0000263A\U0000263B\U0000263C\U0000263D]', '', text).strip()
+    text = re.sub(r'[\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF\U0001F700-\U0001F77F\U0001F780-\U0001F7FF\U0001F800-\U0001F8FF\U0001F900-\U0001F9FF\U0001FA00-\U0001FA6F\U00002702-\U000027B0\U00002639\U0000263A\U0000263B\U0000263C\U0000263D]', '', text).strip()
     return text
 
-
 if riya_bot:
-    @riya_bot.on_message(filters.text | filters.photo | filters.video | filters.audio | filters.document & (filters.private | filters.group), group=-1)
+    @riya_bot.on_message(filters.text | filters.photo | filters.video | filters.audio | filters.document | filters.animation & (filters.private | filters.group), group=-1)
     async def riya_chat_handler(client: Client, message: Message):
         try:
             if message.from_user and message.from_user.is_self:
                 return
 
-            if not riya_gemini_model:
+            if riya_gemini_model is None:
                 await message.reply_text(f"Sorry, {CHATBOT_NAME} abhi thodi si pareshani mein hai! 😊", quote=True, parse_mode=enums.ParseMode.HTML, disable_web_page_preview=True)
                 return
 
             chat_id = message.chat.id
-            user_message = message.caption.strip() if (message.photo or message.video or message.audio or message.document) and message.caption else message.text.strip() if message.text else ""
+            user_message = message.caption.strip() if (message.photo or message.video or message.audio or message.document or message.animation) and message.caption else message.text.strip() if message.text else ""
             user_message_lower = user_message.lower()
             
             user_id = message.from_user.id if message.from_user else None
@@ -373,6 +374,7 @@ if riya_bot:
                 elif message.video: media_type = "VIDEO"
                 elif message.audio: media_type = "AUDIO"
                 elif message.document: media_type = "DOCUMENT"
+                elif message.animation: media_type = "GIF"
 
                 if media_type:
                     await update_chat_history(chat_id, user_first_name, user_username, user_id, f"[{media_type}] {user_message}", role="user")
@@ -381,14 +383,44 @@ if riya_bot:
 
             if not trigger_chatbot and not (message.reply_to_message and message.reply_to_message.from_user and message.reply_to_message.from_user.id == client.me.id):
                 return
-            
+
+            # Check for GIF handling first
+            if message.animation is not None:
+                if gif_ids_collection is not None:
+                    try:
+                        gif_id = message.animation.file_id
+                        existing_gif = await gif_ids_collection.find_one({"_id": gif_id})
+                        if existing_gif is None:
+                            await gif_ids_collection.insert_one({
+                                "_id": gif_id,
+                                "file_unique_id": message.animation.file_unique_id,
+                                "date_added": datetime.utcnow()
+                            })
+
+                        all_gif_ids = await gif_ids_collection.find().to_list(length=100)
+                        if all_gif_ids is not None and len(all_gif_ids) > 0:
+                            selected_gif_id = random.choice(all_gif_ids)["_id"]
+                            await message.reply_animation(selected_gif_id, quote=True)
+                            return
+                        else:
+                            # Fallback if no GIFs in DB
+                            bot_reply = "Haha, ye GIF toh mast hai! Par lagta hai abhi mere paas koi GIF nahi hai bhejane ke liye. Tum hi aur bhejo! 😉"
+                            await message.reply_text(bot_reply, quote=True, parse_mode=enums.ParseMode.HTML, disable_web_page_preview=True)
+                            return
+                    except Exception as gif_error:
+                        print(f"❌ DEBUG: Error handling GIF: {gif_error}")
+                        bot_reply = "Haha, ye GIF toh mast hai! Par lagta hai abhi main GIF bhej nahi paa rahi. Sorry yaar! 😅"
+                        await message.reply_text(bot_reply, quote=True, parse_mode=enums.ParseMode.HTML, disable_web_page_preview=True)
+                        return
+
+            # Continue with other media/text handling if no GIF was processed
             media_to_process = None
-            if message.photo or message.video or message.audio or message.document:
+            if message.photo is not None or message.video is not None or message.audio is not None or message.document is not None:
                 media_to_process = message
-            elif message.reply_to_message and (message.reply_to_message.photo or message.reply_to_message.video or message.reply_to_message.audio or message.reply_to_message.document):
+            elif message.reply_to_message is not None and (message.reply_to_message.photo is not None or message.reply_to_message.video is not None or message.reply_to_message.audio is not None or message.reply_to_message.document is not None):
                 media_to_process = message.reply_to_message
 
-            if media_to_process:
+            if media_to_process is not None:
                 await client.send_chat_action(chat_id, ChatAction.TYPING)
                 
                 try:
@@ -396,20 +428,19 @@ if riya_bot:
                     file_path = None
                     gemini_media_parts = []
                     
-                    if media_to_process.photo:
+                    if media_to_process.photo is not None:
                         file_path = os.path.join(temp_dir, f"photo_{media_to_process.photo.file_id}.jpg")
                         await client.download_media(media_to_process.photo, file_name=file_path)
                         gemini_media_parts.append(genai.upload_file(file_path))
-                    elif media_to_process.video:
-                         if media_to_process.video.duration and media_to_process.video.duration > 120:  # 2 minutes limit
+                    elif media_to_process.video is not None:
+                        if media_to_process.video.duration is not None and media_to_process.video.duration > 120:
                             bot_reply = "Aiyyo! Ye video toh bahut lambi hai, yaar! Main itni badi videos ko process nahi kar pati. 😅 Chhoti wali bhejo na! 😉"
                             await message.reply_text(bot_reply, quote=True, parse_mode=enums.ParseMode.HTML, disable_web_page_preview=True)
                             return
-                         
-                         file_path = os.path.join(temp_dir, f"video_{media_to_process.video.file_id}.mp4")
-                         await client.download_media(media_to_process.video, file_name=file_path)
-                         gemini_media_parts.append(genai.upload_file(file_path))
-                    elif media_to_process.document:
+                        file_path = os.path.join(temp_dir, f"video_{media_to_process.video.file_id}.mp4")
+                        await client.download_media(media_to_process.video, file_name=file_path)
+                        gemini_media_parts.append(genai.upload_file(file_path))
+                    elif media_to_process.document is not None:
                          if any(word in user_message_lower for word in ["kya hai", "kya-kya hai", "bata"]):
                             bot_reply = f"Yaar, yeh ek document hai jiska naam '{media_to_process.document.file_name}' hai. Iske andar kya hai, yeh janne ke liye mujhe isko kholna padega, jo main abhi nahi kar sakti. 😅 Tum hi bata do na, iske andar kya hai?"
                          else:
@@ -417,14 +448,12 @@ if riya_bot:
                          await message.reply_text(bot_reply, quote=True, parse_mode=enums.ParseMode.HTML, disable_web_page_preview=True)
                          await update_chat_history(chat_id, CHATBOT_NAME, client.me.username if client.me else None, client.me.id, bot_reply, role="model")
                          return
-
-                    elif media_to_process.audio:
-                         if media_to_process.audio.duration and media_to_process.audio.duration > 120:  # 2 minutes limit for audio
+                    elif media_to_process.audio is not None:
+                         if media_to_process.audio.duration is not None and media_to_process.audio.duration > 120:
                              bot_reply = "Hey, ye audio toh kaafi lambi hai! Main itne bade audio files ko abhi nahi sun sakti. 😅 Chhota wala bhejoge?"
                              await message.reply_text(bot_reply, quote=True, parse_mode=enums.ParseMode.HTML, disable_web_page_preview=True)
                              return
-
-                         if media_to_process.audio.performer and media_to_process.audio.title:
+                         if media_to_process.audio.performer is not None and media_to_process.audio.title is not None:
                             bot_reply = f"Mmm, ye gaana '{media_to_process.audio.title}' hai, '{media_to_process.audio.performer}' ne gaaya hai! 😍 bahut hi mast gaana hai!"
                          else:
                             bot_reply = f"Mmm, kya mast gaana hai! 😍 Kiska gaana hai ye? Maine suna nahi hai. Aap bata sakte hain, boss? 😉"
@@ -432,16 +461,13 @@ if riya_bot:
                          await update_chat_history(chat_id, CHATBOT_NAME, client.me.username if client.me else None, client.me.id, bot_reply, role="model")
                          return
                     
-                    if gemini_media_parts:
+                    if len(gemini_media_parts) > 0:
                         user_query_for_gemini = user_message if user_message else "Tell me what's in this media file."
-                        prompt = f"This is a request about a media file. Act like a human friend and respond. User said: '{user_query_for_gemini}'. The media is a {media_to_process.caption if media_to_process.caption else 'file'}."
-                        
+                        prompt = f"This is a request about a media file. Act like a human friend and respond. User said: '{user_query_for_gemini}'. The media is a {media_to_process.caption if media_to_process.caption is not None else 'file'}."
                         full_prompt = [prompt] + gemini_media_parts
                         gemini_response = await asyncio.to_thread(riya_gemini_model.generate_content, full_prompt)
-                        
                         bot_reply = gemini_response.text.strip()
-                        
-                        if media_to_process.photo and any(word in user_message_lower for word in ["chicken", "food", "khana", "khaa lee"]):
+                        if media_to_process.photo is not None and any(word in user_message_lower for word in ["chicken", "food", "khana", "khaa lee"]):
                              food_responses_media = [
                                 f"Wah! Ye toh bahut hi zabardast lag raha hai, boss! 🤤 Isko dekh kar hi bhookh lag gayi.",
                                 f"Arre yaar, yeh kya dikha diya! Isko dekh kar toh bas munh mein paani aa gaya. 😋",
@@ -455,7 +481,7 @@ if riya_bot:
                     print(f"❌ DEBUG: Error processing media: {e}")
                     bot_reply = f"Lagta hai kuch gadbad ho gayi, yeh file nahi dekh pa rahi. 😕"
                 finally:
-                    if file_path and os.path.exists(file_path):
+                    if file_path is not None and os.path.exists(file_path):
                         os.unlink(file_path)
                     
                 await message.reply_text(bot_reply, quote=True, parse_mode=enums.ParseMode.HTML, disable_web_page_preview=True)
@@ -466,11 +492,11 @@ if riya_bot:
             await client.send_chat_action(chat_id, ChatAction.TYPING)
 
             if "name mat le" in user_message_lower or "mujhe mere name se mat bulao" in user_message_lower or "don't call me by name" in user_message_lower:
-                if user_id and "no_name_calling" not in user_prefs:
+                if user_id is not None and "no_name_calling" not in user_prefs:
                     await set_user_preference(user_id, "no_name_calling")
                     addressing_name_for_gemini = "Dost"
             elif "mera naam le sakte ho" in user_message_lower or "call me by my name" in user_message_lower:
-                if user_id and "no_name_calling" in user_prefs:
+                if user_id is not None and "no_name_calling" in user_prefs:
                     await remove_user_preference(user_id, "no_name_calling")
                     addressing_name_for_gemini = await simplify_username_for_addressing(user_id, user_username, user_first_name)
 
@@ -540,11 +566,10 @@ if riya_bot:
                 ]
                 bot_reply = random.choice(insult_responses)
                 await message.reply_text(bot_reply, quote=True, parse_mode=enums.ParseMode.HTML, disable_web_page_preview=True)
-                await update_chat_history(chat_id, CHATBOT_NAME, client.me.username if client.me else None, client.me.id, bot_reply, role="model")
+                await update_chat_history(chat_id, CHATBOT_NAME, client.me.username if client.me is not None else None, client.me.id, bot_reply, role="model")
                 return
 
             if is_abusive_query and not is_owner:
-                # Let API handle the abusive response for more variety
                 pass
             
             if is_my_name_query:
@@ -563,7 +588,7 @@ if riya_bot:
                     ]
                 bot_reply = random.choice(sassy_name_responses)
                 await message.reply_text(bot_reply, quote=True, parse_mode=enums.ParseMode.HTML, disable_web_page_preview=True)
-                await update_chat_history(chat_id, CHATBOT_NAME, client.me.username if client.me else None, client.me.id, bot_reply, role="model")
+                await update_chat_history(chat_id, CHATBOT_NAME, client.me.username if client.me is not None else None, client.me.id, bot_reply, role="model")
                 return
             elif is_food_query:
                 food_responses = [
@@ -591,28 +616,28 @@ if riya_bot:
                     ]
                 bot_reply = random.choice(food_responses)
                 await message.reply_text(bot_reply, quote=True, parse_mode=enums.ParseMode.HTML, disable_web_page_preview=True)
-                await update_chat_history(chat_id, CHATBOT_NAME, client.me.username if client.me else None, client.me.id, bot_reply, role="model")
+                await update_chat_history(chat_id, CHATBOT_NAME, client.me.username if client.me is not None else None, client.me.id, bot_reply, role="model")
                 return
             elif is_tag_query:
                 target_tag_final = ""
                 target_user_id = None
                 
-                if message.reply_to_message and message.reply_to_message.from_user:
+                if message.reply_to_message is not None and message.reply_to_message.from_user is not None:
                     target_user_id = message.reply_to_message.from_user.id
                     target_tag_final = generate_tag(target_user_id, message.reply_to_message.from_user.first_name, message.reply_to_message.from_user.username)
                 
-                if not target_tag_final:
+                if target_tag_final == "":
                     for uid, name_data in learned_user_names.items():
-                        if name_data['first_name'] and name_data['first_name'].lower() in user_message_lower:
+                        if name_data['first_name'] is not None and name_data['first_name'].lower() in user_message_lower:
                             target_user_id = uid
                             target_tag_final = generate_tag(uid, name_data['first_name'], name_data['username'])
                             break
                 
-                if not target_tag_final and (re.search(r'\b(boss|malik|owner|abhi)\b', user_message_lower)):
+                if target_tag_final == "" and (re.search(r'\b(boss|malik|owner|abhi)\b', user_message_lower)):
                     target_user_id = OWNER_TELEGRAM_IDS[0]
                     target_tag_final = generate_tag(OWNER_TELEGRAM_IDS[0], OWNER_NAME)
 
-                if target_tag_final and target_user_id:
+                if target_tag_final != "" and target_user_id is not None:
                     user_tag_for_reply = generate_tag(user_id, user_first_name, user_username)
                     
                     tag_and_abuse_query = any(word in user_message_lower for word in ["gaali suna de", "gaali de", "gaali bakk"])
@@ -641,9 +666,9 @@ if riya_bot:
                 
                 final_bot_response = bot_reply
                 await message.reply_text(final_bot_response, quote=True, parse_mode=enums.ParseMode.HTML, disable_web_page_preview=True)
-                await update_chat_history(chat_id, CHATBOT_NAME, client.me.username if client.me else None, client.me.id, final_bot_response, role="model")
+                await update_chat_history(chat_id, CHATBOT_NAME, client.me.username if client.me is not None else None, client.me.id, final_bot_response, role="model")
                 return
-            elif specific_emoji_requested:
+            elif specific_emoji_requested is not None:
                 bot_reply = specific_emoji_requested
                 await message.reply_text(bot_reply, quote=True)
                 return
@@ -657,7 +682,7 @@ if riya_bot:
             for msg in history[-15:]:
                 if msg["role"] == "user":
                     sender_name_display = msg.get("sender_name", "Unknown")
-                    if msg.get("sender_id"):
+                    if msg.get("sender_id") is not None:
                         past_user_prefs_for_msg = await get_user_preferences(msg.get("sender_id"))
                         if "no_name_calling" in past_user_prefs_for_msg:
                             sender_name_display = "Dost"
@@ -669,7 +694,7 @@ if riya_bot:
             model = genai.GenerativeModel(TARGET_GEMINI_MODEL_RIYA, system_instruction=RIYA_SYSTEM_INSTRUCTION)
             gemini_response = await asyncio.to_thread(model.generate_content, gemini_history_content)
 
-            raw_gemini_reply = gemini_response.text.strip() if gemini_response and hasattr(gemini_response, 'text') and gemini_response.text else (
+            raw_gemini_reply = gemini_response.text.strip() if gemini_response is not None and hasattr(gemini_response, 'text') and gemini_response.text is not None else (
                 f"Kuch bolna tha yaar? 😊" if input_language in ["hi", "hinglish"] else 
                 f"Ki dassna si, yaar? 😊" if input_language == "punjabi" else 
                 f"Something to say, mate? 😊"
@@ -695,17 +720,17 @@ if riya_bot:
 
             final_bot_response = bot_reply
             await message.reply_text(final_bot_response, quote=True, parse_mode=enums.ParseMode.HTML, disable_web_page_preview=True)
-            await update_chat_history(chat_id, CHATBOT_NAME, client.me.username if client.me else None, client.me.id, final_bot_response, role="model")
+            await update_chat_history(chat_id, CHATBOT_NAME, client.me.username if client.me is not None else None, client.me.id, final_bot_response, role="model")
 
         except Exception as e:
             print(f"❌ DEBUG_HANDLER: Error generating response for {chat_id}: {e}")
-            input_language = detect_language(user_message) if user_message else "hi"
+            input_language = detect_language(user_message) if user_message is not None else "hi"
             error_reply_text = (
                 f"Lagta hai kuch gadbad ho gayi yaar! 😕 Dobara koshish karo." if input_language in ["hi", "hinglish"] else 
                 f"Kuch galti ho gayi, yaar! 😕 Malle try kar." if input_language == "punjabi" else 
                 f"Something went wrong, mate! 😕 Try again."
             )
-            final_error_message = f"{error_reply_text}"
+            final_error_message = f"➠ {error_reply_text}"
             await message.reply_text(final_error_message, quote=True, parse_mode=enums.ParseMode.HTML, disable_web_page_preview=True)
 
 
@@ -716,14 +741,14 @@ if riya_bot:
                 return
 
             chat_id = message.chat.id
-            user_id = message.from_user.id if message.from_user else None
-            is_owner = (user_id and user_id in OWNER_TELEGRAM_IDS)
+            user_id = message.from_user.id if message.from_user is not None else None
+            is_owner = (user_id is not None and user_id in OWNER_TELEGRAM_IDS)
             
             should_reply_sticker = False
             if message.chat.type == enums.ChatType.PRIVATE:
                 should_reply_sticker = True
             elif message.chat.type in [enums.ChatType.GROUP, enums.ChatType.SUPERGROUP]:
-                if message.reply_to_message and message.reply_to_message.from_user and message.reply_to_message.from_user.id == client.me.id:
+                if message.reply_to_message is not None and message.reply_to_message.from_user is not None and message.reply_to_message.from_user.id == client.me.id:
                     should_reply_sticker = True
                 elif message.mentioned:
                      should_reply_sticker = True
@@ -736,10 +761,9 @@ if riya_bot:
 
             await client.send_chat_action(chat_id, ChatAction.CHOOSE_STICKER)
             
-            # Save the incoming sticker ID
-            if sticker_ids_collection is not None and message.sticker:
+            if sticker_ids_collection is not None and message.sticker is not None:
                 existing_sticker = await sticker_ids_collection.find_one({"_id": message.sticker.file_id})
-                if not existing_sticker:
+                if existing_sticker is None:
                     await sticker_ids_collection.insert_one({
                         "_id": message.sticker.file_id,
                         "emoji": message.sticker.emoji,
@@ -747,16 +771,13 @@ if riya_bot:
                         "date_added": datetime.utcnow()
                     })
 
-            # Get a random sticker from the saved ones
             if sticker_ids_collection is not None:
                 all_sticker_ids = await sticker_ids_collection.find().to_list(length=100)
-                if all_sticker_ids:
+                if all_sticker_ids is not None and len(all_sticker_ids) > 0:
                     selected_sticker_id = random.choice(all_sticker_ids)["_id"]
                     await message.reply_sticker(selected_sticker_id, quote=True)
-                    return # Exit after sending a sticker
+                    return
             
-            # Fallback if no stickers are in DB or DB is not available
-            # This part will be executed only if the above logic fails
             fallback_stickers = {
                 "happy": "CAACAgUAAxkBAAIDq2ZkXo1yU8Uj8Qo15B1v0Q0K2B2qAAK2AAM8Wb8p0N2RkO_R3s00BA",
                 "sad": "CAACAgUAAxkBAAIDsGZkXqmG8Xo1b4d0Qo2B2qAAK2AAM8Wb8p0N2RkO_R3s00BA",
@@ -765,7 +786,7 @@ if riya_bot:
             }
             
             selected_sticker_id = None
-            if message.sticker and message.sticker.emoji:
+            if message.sticker is not None and message.sticker.emoji is not None:
                 sticker_emoji = message.sticker.emoji
                 if "😊" in sticker_emoji or "😂" in sticker_emoji or "😃" in sticker_emoji:
                     selected_sticker_id = fallback_stickers["happy"]
@@ -778,7 +799,7 @@ if riya_bot:
             else:
                 selected_sticker_id = fallback_stickers["general"]
             
-            if selected_sticker_id:
+            if selected_sticker_id is not None:
                 await message.reply_sticker(selected_sticker_id, quote=True)
             
         except Exception as e:
@@ -787,14 +808,14 @@ if riya_bot:
             
     async def start_riya_chatbot():
         global CHATBOT_NAME
-        if riya_bot and not riya_bot.is_connected:
+        if riya_bot is not None and not riya_bot.is_connected:
             try:
                 await riya_bot.start()
             except Exception as e:
                 print(f"❌ Chatbot: Failed to start {CHATBOT_NAME} bot client: {e}")
 
     async def stop_riya_chatbot():
-        if riya_bot and riya_bot.is_connected:
+        if riya_bot is not None and riya_bot.is_connected:
             try:
                 await riya_bot.stop()
             except Exception as e:
